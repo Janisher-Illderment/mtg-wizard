@@ -12,6 +12,7 @@ dependencies = [
     "rich>=13.7.1",
     "requests>=2.31.0",
     "python-dotenv>=1.0.1",
+    "ijson>=3.2.3",
 ]
 
 [project.optional-dependencies]

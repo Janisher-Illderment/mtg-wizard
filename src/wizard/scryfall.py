@@ -6,7 +6,9 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
+import ijson
 import requests
 
 from wizard.database import (
@@ -18,6 +20,11 @@ from wizard.database import (
     set_cache_meta,
 )
 from wizard.models import CollectionCard, ScryfallCard
+
+# Stream bulk cards in batches of this size. executemany() binds parameters
+# per row (not per batch) so SQLite's variable-count limit is not the issue;
+# 1000 keeps peak memory in the low-MB range while amortizing commit cost.
+_BULK_BATCH_SIZE = 1000
 
 BULK_INDEX_URL = "https://api.scryfall.com/bulk-data"
 BULK_TYPE_ORACLE = "oracle_cards"
@@ -37,14 +44,24 @@ def _fetch_bulk_index(timeout: float = 30.0) -> dict:
     raise RuntimeError(f"Scryfall bulk-data index has no '{BULK_TYPE_ORACLE}' entry")
 
 
-def _download_json(url: str, timeout: float = 300.0) -> list[dict]:
-    """Stream-download a Scryfall bulk JSON file and parse it into a list."""
-    resp = requests.get(url, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    if not isinstance(data, list):
-        raise RuntimeError("Scryfall bulk file did not contain a JSON array")
-    return data
+def _iter_bulk_cards(url: str, timeout: float = 300.0) -> Iterator[dict]:
+    """Stream-iterate Scryfall bulk JSON card objects without materializing all of them.
+
+    The oracle_cards bulk file is ~450 MB and a top-level JSON array. We use
+    `stream=True` on the HTTP request and feed `resp.raw` into `ijson.items`
+    with the `'item'` prefix (which matches each element of a top-level array).
+    This keeps peak memory proportional to the largest single card object
+    rather than the whole payload.
+
+    Caller is responsible for closing the response — we own the lifetime via
+    the `with` block around the request.
+    """
+    with requests.get(url, timeout=timeout, stream=True) as resp:
+        resp.raise_for_status()
+        # urllib3's .raw needs decode_content=True so gzip/deflate responses
+        # are transparently inflated before ijson parses them.
+        resp.raw.decode_content = True
+        yield from ijson.items(resp.raw, "item")
 
 
 def _seconds_since(ts_iso: str) -> float:
@@ -77,11 +94,23 @@ def download_bulk_data(db_path: Path, force: bool = False) -> int:
         download_uri = index_entry.get("download_uri")
         if not download_uri:
             raise RuntimeError("Scryfall bulk index entry is missing download_uri")
-        cards = _download_json(download_uri)
-        written = bulk_upsert_cards(conn, cards)
+
+        # Stream cards in fixed-size batches so peak memory is O(batch_size)
+        # rather than O(bulk_file_size). A single commit per batch also keeps
+        # SQLite's WAL from growing without bound.
+        total = 0
+        batch: list[dict] = []
+        for card in _iter_bulk_cards(download_uri):
+            batch.append(card)
+            if len(batch) >= _BULK_BATCH_SIZE:
+                total += bulk_upsert_cards(conn, batch)
+                batch.clear()
+        if batch:
+            total += bulk_upsert_cards(conn, batch)
+
         set_cache_meta(conn, CACHE_KEY_LAST_SYNC, datetime.now(timezone.utc).isoformat())
         set_cache_meta(conn, CACHE_KEY_BULK_TYPE, BULK_TYPE_ORACLE)
-        return written
+        return total
     finally:
         conn.close()
 

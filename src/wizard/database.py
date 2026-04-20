@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 from wizard.models import CollectionCard
 
@@ -58,10 +59,21 @@ SCHEMA: tuple[str, ...] = (
 
 
 def init_db(db_path: Path) -> sqlite3.Connection:
-    """Create (if needed) and open the wizard SQLite database at `db_path`."""
+    """Create (if needed) and open the wizard SQLite database at `db_path`.
+
+    Sets WAL journaling + NORMAL synchronous mode + memory-backed temp store
+    so the large Scryfall bulk ingest doesn't block readers and doesn't flush
+    to disk on every row. These are safe defaults for a single-user cache DB.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    # PRAGMAs first so DDL runs inside the tuned session. journal_mode is
+    # persistent (stored in the DB file); synchronous and temp_store are
+    # connection-scoped but cheap to re-apply on every open.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA foreign_keys = ON")
     for statement in SCHEMA:
         conn.execute(statement)
@@ -96,8 +108,12 @@ def _card_row_from_scryfall(card: dict) -> tuple:
     )
 
 
-def bulk_upsert_cards(conn: sqlite3.Connection, cards: list[dict]) -> int:
-    """Upsert a batch of Scryfall card dicts; returns the number written."""
+def bulk_upsert_cards(conn: sqlite3.Connection, cards: Iterable[dict]) -> int:
+    """Upsert Scryfall card dicts; returns the number written.
+
+    Accepts any iterable so callers can feed us one streamed batch at a time
+    without holding the whole payload in memory.
+    """
     rows = [_card_row_from_scryfall(c) for c in cards if c.get("id")]
     if not rows:
         return 0
