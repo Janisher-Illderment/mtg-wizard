@@ -8,12 +8,13 @@ from wizard.collection import parse_manabox_csv
 
 
 def test_parses_all_rows(sample_collection_csv: Path) -> None:
-    cards = parse_manabox_csv(sample_collection_csv)
+    cards, warnings = parse_manabox_csv(sample_collection_csv)
     assert len(cards) == 4
+    assert warnings == []
 
 
 def test_parses_first_row_fields(sample_collection_csv: Path) -> None:
-    cards = parse_manabox_csv(sample_collection_csv)
+    cards, _ = parse_manabox_csv(sample_collection_csv)
     bolt = cards[0]
     assert bolt.name == "Lightning Bolt"
     assert bolt.set_code == "LEA"
@@ -33,14 +34,14 @@ def test_parses_first_row_fields(sample_collection_csv: Path) -> None:
 
 
 def test_parses_foil_yes(sample_collection_csv: Path) -> None:
-    cards = parse_manabox_csv(sample_collection_csv)
+    cards, _ = parse_manabox_csv(sample_collection_csv)
     counterspell = next(c for c in cards if c.name == "Counterspell")
     assert counterspell.foil is True
     assert counterspell.quantity == 2
 
 
 def test_parses_missing_price_as_none(sample_collection_csv: Path) -> None:
-    cards = parse_manabox_csv(sample_collection_csv)
+    cards, _ = parse_manabox_csv(sample_collection_csv)
     sol_ring = next(c for c in cards if c.name == "Sol Ring")
     assert sol_ring.purchase_price is None
 
@@ -55,9 +56,10 @@ def test_handles_utf8_bom(tmp_path: Path) -> None:
     )
     csv_path = tmp_path / "bom.csv"
     csv_path.write_text(content, encoding="utf-8")
-    cards = parse_manabox_csv(csv_path)
+    cards, warnings = parse_manabox_csv(csv_path)
     assert len(cards) == 1
     assert cards[0].name == "Lightning Bolt"
+    assert warnings == []
 
 
 def test_skips_blank_rows(tmp_path: Path) -> None:
@@ -72,7 +74,7 @@ def test_skips_blank_rows(tmp_path: Path) -> None:
     )
     csv_path = tmp_path / "blanks.csv"
     csv_path.write_text(content, encoding="utf-8")
-    cards = parse_manabox_csv(csv_path)
+    cards, _ = parse_manabox_csv(csv_path)
     assert [c.name for c in cards] == ["Lightning Bolt", "Sol Ring"]
 
 
@@ -85,8 +87,45 @@ def test_handles_missing_optional_fields(tmp_path: Path) -> None:
     )
     csv_path = tmp_path / "sparse.csv"
     csv_path.write_text(content, encoding="utf-8")
-    cards = parse_manabox_csv(csv_path)
+    cards, _ = parse_manabox_csv(csv_path)
     assert len(cards) == 1
     assert cards[0].collector_number == ""
     assert cards[0].rarity == ""
     assert cards[0].purchase_price is None
+
+
+def test_invalid_quantity_produces_warning_and_uses_default(tmp_path: Path) -> None:
+    # Non-empty but non-integer Quantity values must surface as warnings and
+    # fall back to the documented default (1) rather than silently swallowing.
+    content = (
+        "Name,Set code,Set name,Collector number,Foil,Rarity,Quantity,"
+        "ManaBox ID,Scryfall ID,Purchase price,Misprint,Altered,Condition,"
+        "Language,Purchase price currency\n"
+        "Lightning Bolt,LEA,Limited Edition Alpha,177,No,Common,NaN,1,2,1.00,"
+        "No,No,Near Mint,English,EUR\n"
+    )
+    csv_path = tmp_path / "bad_qty.csv"
+    csv_path.write_text(content, encoding="utf-8")
+    cards, warnings = parse_manabox_csv(csv_path)
+    assert len(cards) == 1
+    assert cards[0].quantity == 1  # default
+    assert len(warnings) == 1
+    assert warnings[0].column == "Quantity"
+    assert warnings[0].raw_value == "NaN"
+    assert warnings[0].row_number == 1
+
+
+def test_blank_quantity_does_not_warn(tmp_path: Path) -> None:
+    # Blank values are expected for optional columns and must not warn.
+    content = (
+        "Name,Set code,Set name,Collector number,Foil,Rarity,Quantity,"
+        "ManaBox ID,Scryfall ID,Purchase price,Misprint,Altered,Condition,"
+        "Language,Purchase price currency\n"
+        "Lightning Bolt,LEA,Limited Edition Alpha,177,No,Common,,1,2,1.00,"
+        "No,No,Near Mint,English,EUR\n"
+    )
+    csv_path = tmp_path / "blank_qty.csv"
+    csv_path.write_text(content, encoding="utf-8")
+    cards, warnings = parse_manabox_csv(csv_path)
+    assert cards[0].quantity == 1
+    assert warnings == []

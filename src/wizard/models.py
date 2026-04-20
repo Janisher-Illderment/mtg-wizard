@@ -68,3 +68,18 @@ class DeckSuggestion:
     sideboard: list[DeckCard] = field(default_factory=list)
     strategy: str = ""
     key_synergies: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ParseWarning:
+    """A single recoverable issue encountered while parsing a CSV row.
+
+    Emitted instead of silently falling back to a default so the CLI can
+    surface malformed data. `row_number` is 1-based and refers to the CSV
+    data row (header row is row 0 conceptually — first data row is row 1).
+    """
+
+    row_number: int
+    column: str
+    raw_value: str
+    reason: str

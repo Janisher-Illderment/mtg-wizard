@@ -131,12 +131,24 @@ def sync(ctx: click.Context, force: bool) -> None:
     is_flag=True,
     help="Skip the 'replace existing cards?' confirmation prompt.",
 )
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Print up to 10 parser warning details after parsing.",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    help="Fail (exit 1) before inserting if any parse warnings were produced.",
+)
 @click.pass_context
 def import_collection(
     ctx: click.Context,
     path: Path,
     mode: str,
     yes: bool,
+    verbose: bool,
+    strict: bool,
 ) -> None:
     """Parse and store a ManaBox CSV export in the local collection.
 
@@ -148,10 +160,37 @@ def import_collection(
     settings: Settings = ctx.obj["settings"]
     _console.print(f"Parsing [cyan]{path}[/]...")
     try:
-        cards = parse_manabox_csv(path)
+        cards, warnings = parse_manabox_csv(path)
     except Exception as exc:  # noqa: BLE001
         _console.print(f"[red]Failed to parse CSV:[/] {exc}")
         raise SystemExit(1) from exc
+
+    # Always surface the warning count so silent defaults are no longer silent.
+    _console.print(
+        f"Parsed {len(cards)} rows · "
+        f"[yellow]{len(warnings)} warning(s)[/]."
+    )
+    if warnings and verbose:
+        for w in warnings[:10]:
+            _console.print(
+                f"  [yellow]row {w.row_number} · {w.column}[/]: "
+                f"{w.reason} (raw={w.raw_value!r})"
+            )
+        if len(warnings) > 10:
+            _console.print(f"  ...and {len(warnings) - 10} more.")
+    if warnings and strict:
+        # Under --strict we surface every warning (bypass the --verbose cap)
+        # and refuse to insert.
+        if not verbose:
+            for w in warnings[:10]:
+                _console.print(
+                    f"  [yellow]row {w.row_number} · {w.column}[/]: "
+                    f"{w.reason} (raw={w.raw_value!r})"
+                )
+            if len(warnings) > 10:
+                _console.print(f"  ...and {len(warnings) - 10} more.")
+        _console.print("[red]--strict: aborting before insert due to warnings.[/]")
+        raise SystemExit(1)
 
     conn = init_db(settings.db_path)
     try:
