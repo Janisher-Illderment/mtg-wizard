@@ -356,6 +356,7 @@ def build(
                         ranked_cards=ranked,
                         color_identity=color_identity,
                         model=settings.model,
+                        max_output_tokens=settings.max_output_tokens,
                     )
                 except WizardAPIError as exc:
                     # `finally` below tears down the progress task; just
