@@ -164,8 +164,34 @@ def get_card_by_name(conn: sqlite3.Connection, name: str) -> dict | None:
     return _row_to_dict(cur.fetchone())
 
 
-def insert_collection(conn: sqlite3.Connection, cards: list[CollectionCard]) -> int:
-    """Insert CollectionCard rows; returns the number inserted."""
+def clear_collection(conn: sqlite3.Connection) -> int:
+    """Delete every row from the `collection` table. Returns rows deleted.
+
+    Caller is responsible for committing — allows atomic replace-then-insert
+    inside a single transaction (see `insert_collection(..., replace=True)`).
+    """
+    cur = conn.execute("DELETE FROM collection")
+    return cur.rowcount if cur.rowcount is not None else 0
+
+
+def count_collection(conn: sqlite3.Connection) -> int:
+    """Return the total number of rows currently in the `collection` table."""
+    cur = conn.execute("SELECT COUNT(*) AS n FROM collection")
+    row = cur.fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
+def insert_collection(
+    conn: sqlite3.Connection,
+    cards: list[CollectionCard],
+    *,
+    replace: bool = False,
+) -> int:
+    """Insert CollectionCard rows; returns the number inserted.
+
+    When `replace=True`, the existing collection is deleted inside the same
+    transaction before inserting, so re-imports don't duplicate.
+    """
     rows = [
         (
             card.scryfall_id or None,
@@ -179,18 +205,25 @@ def insert_collection(conn: sqlite3.Connection, cards: list[CollectionCard]) -> 
         )
         for card in cards
     ]
-    if not rows:
+    if not rows and not replace:
         return 0
-    conn.executemany(
-        """
-        INSERT INTO collection (
-            scryfall_id, name, set_code, collector_number,
-            quantity, foil, condition, language
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
+    try:
+        if replace:
+            conn.execute("DELETE FROM collection")
+        if rows:
+            conn.executemany(
+                """
+                INSERT INTO collection (
+                    scryfall_id, name, set_code, collector_number,
+                    quantity, foil, condition, language
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return len(rows)
 
 

@@ -12,7 +12,7 @@ from rich.table import Table
 
 from wizard.collection import parse_manabox_csv
 from wizard.config import Settings, load_settings
-from wizard.database import get_collection, init_db, insert_collection
+from wizard.database import count_collection, get_collection, init_db, insert_collection
 from wizard.exporter import render_deck, write_deck
 from wizard.models import CollectionCard, DeckSuggestion
 from wizard.scorer import rank_collection_for_format
@@ -118,9 +118,32 @@ def sync(ctx: click.Context, force: bool) -> None:
 
 @main.command("import-collection")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--mode",
+    type=click.Choice(["replace", "append"], case_sensitive=False),
+    default="replace",
+    show_default=True,
+    help="`replace` wipes the existing collection first; `append` keeps it.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Skip the 'replace existing cards?' confirmation prompt.",
+)
 @click.pass_context
-def import_collection(ctx: click.Context, path: Path) -> None:
-    """Parse and store a ManaBox CSV export in the local collection."""
+def import_collection(
+    ctx: click.Context,
+    path: Path,
+    mode: str,
+    yes: bool,
+) -> None:
+    """Parse and store a ManaBox CSV export in the local collection.
+
+    By default (`--mode replace`) the existing collection is cleared first so
+    re-importing the same file does not produce duplicates. Use `--mode append`
+    to keep previous rows. Any non-empty existing collection triggers an
+    interactive confirmation unless `--yes` is passed or stdin is not a TTY.
+    """
     settings: Settings = ctx.obj["settings"]
     _console.print(f"Parsing [cyan]{path}[/]...")
     try:
@@ -131,6 +154,29 @@ def import_collection(ctx: click.Context, path: Path) -> None:
 
     conn = init_db(settings.db_path)
     try:
+        mode_normalized = mode.lower()
+        replace = mode_normalized == "replace"
+        if replace:
+            existing = count_collection(conn)
+            if existing > 0 and not yes:
+                import sys as _sys
+
+                if _sys.stdin.isatty():
+                    answer = click.prompt(
+                        f"Replace {existing} existing cards? [y/N]",
+                        default="N",
+                        show_default=False,
+                    )
+                    if answer.strip().lower() not in {"y", "yes"}:
+                        _console.print("[yellow]Aborted.[/]")
+                        raise SystemExit(1)
+                else:
+                    _console.print(
+                        f"[red]Refusing to replace {existing} existing cards "
+                        f"without --yes on non-interactive stdin.[/]"
+                    )
+                    raise SystemExit(1)
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -138,11 +184,12 @@ def import_collection(ctx: click.Context, path: Path) -> None:
             transient=True,
         ) as progress:
             task = progress.add_task(f"Inserting {len(cards)} cards...", total=None)
-            inserted = insert_collection(conn, cards)
+            inserted = insert_collection(conn, cards, replace=replace)
             progress.remove_task(task)
     finally:
         conn.close()
-    _console.print(f"[green]Imported {inserted} cards.[/]")
+    verb = "Replaced with" if mode_normalized == "replace" else "Appended"
+    _console.print(f"[green]{verb} {inserted} cards.[/]")
 
 
 @main.command("collection")
