@@ -31,15 +31,6 @@ SCHEMA: tuple[str, ...] = (
     )
     """,
     """
-    CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
-        name,
-        oracle_text,
-        type_line,
-        content='cards',
-        content_rowid='rowid'
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS collection (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scryfall_id TEXT REFERENCES cards(scryfall_id),
@@ -136,8 +127,6 @@ def bulk_upsert_cards(conn: sqlite3.Connection, cards: list[dict]) -> int:
         """,
         rows,
     )
-    # Rebuild FTS index so searches reflect the new rows.
-    conn.execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild')")
     conn.commit()
     return len(rows)
 
