@@ -64,6 +64,8 @@ def _fake_tool_use_response(deck_payload: dict) -> SimpleNamespace:
 
 def test_suggest_deck_parses_tool_use() -> None:
     client = MagicMock()
+    # Modern-legal deck: 60 mainboard, 15 sideboard, <=4 copies of non-basics.
+    # Basic lands ("Mountain") are exempt from the 4-copy cap.
     client.messages.create.return_value = _fake_tool_use_response(
         {
             "deck_name": "Mono-Red Aggro",
@@ -71,9 +73,14 @@ def test_suggest_deck_parses_tool_use() -> None:
             "commander": None,
             "mainboard": [
                 {"quantity": 4, "name": "Lightning Bolt", "set_code": "lea", "collector_number": "177"},
-                {"quantity": 20, "name": "Mountain", "set_code": None, "collector_number": None},
+                {"quantity": 56, "name": "Mountain", "set_code": None, "collector_number": None},
             ],
-            "sideboard": [{"quantity": 2, "name": "Smash to Smithereens"}],
+            "sideboard": [
+                {"quantity": 4, "name": "Smash to Smithereens"},
+                {"quantity": 4, "name": "Shattering Spree"},
+                {"quantity": 4, "name": "Searing Blaze"},
+                {"quantity": 3, "name": "Relic of Progenitus"},
+            ],
             "strategy": "Fast damage, efficient removal.",
             "key_synergies": ["low curve", "burn"],
         }
@@ -94,12 +101,17 @@ def test_suggest_deck_parses_tool_use() -> None:
 
 def test_suggest_deck_sends_cache_control_and_tool_choice() -> None:
     client = MagicMock()
+    # Commander: 100 mainboard cards, singleton non-basics. Fill with 99 Mountains
+    # (basic lands are exempt from the 1-copy cap) plus the commander itself.
     client.messages.create.return_value = _fake_tool_use_response(
         {
             "deck_name": "Test",
             "format": "Commander",
             "commander": "Krenko, Mob Boss",
-            "mainboard": [{"quantity": 1, "name": "Krenko, Mob Boss"}],
+            "mainboard": [
+                {"quantity": 1, "name": "Krenko, Mob Boss"},
+                {"quantity": 99, "name": "Mountain"},
+            ],
             "sideboard": [],
             "strategy": "s",
             "key_synergies": [],
@@ -146,12 +158,14 @@ def test_suggest_deck_tool_schema_shape() -> None:
 
 def test_suggest_deck_custom_model() -> None:
     client = MagicMock()
+    # 60 Mountains easily clears the Modern count + 4-copy-cap check
+    # (basics are exempt from the cap).
     client.messages.create.return_value = _fake_tool_use_response(
         {
             "deck_name": "Test",
             "format": "Modern",
             "commander": None,
-            "mainboard": [{"quantity": 1, "name": "x"}],
+            "mainboard": [{"quantity": 60, "name": "Mountain"}],
             "sideboard": [],
             "strategy": "s",
             "key_synergies": [],
