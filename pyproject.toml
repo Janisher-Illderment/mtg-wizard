@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=69.0"]
-build-backend = "setuptools.backends.legacy:BuildBackend"
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "mtg-wizard"
@@ -10,7 +10,6 @@ dependencies = [
     "anthropic>=0.39.0",
     "click>=8.1.7",
     "rich>=13.7.1",
-    "scrython>=1.9.0",
     "requests>=2.31.0",
     "python-dotenv>=1.0.1",
 ]
@@ -27,3 +26,11 @@ wizard = "wizard.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=wizard --cov-report=term-missing"
