@@ -297,7 +297,7 @@ def build(
             task = progress.add_task("Consulting the Wizard...", total=None)
             try:
                 # Lazy import keeps `anthropic` out of the offline command paths.
-                from wizard.wizard import suggest_deck
+                from wizard.deckbuilder import suggest_deck
 
                 deck = suggest_deck(
                     client=client,

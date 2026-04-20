@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wizard.models import CollectionCard, ScryfallCard
-from wizard.wizard import SUGGEST_DECK_TOOL, SYSTEM_PROMPT, suggest_deck
+from wizard.deckbuilder import SUGGEST_DECK_TOOL, SYSTEM_PROMPT, suggest_deck
 
 
 def _sc(name: str, sid: str = "id-1") -> ScryfallCard:
@@ -166,13 +166,13 @@ def test_suggest_deck_custom_model() -> None:
     assert client.messages.create.call_args.kwargs["model"] == "claude-opus-4-6"
 
 
-@patch("wizard.wizard.anthropic.Anthropic")
+@patch("wizard.deckbuilder.anthropic.Anthropic")
 def test_wizard_does_not_call_api_at_import(mock_client_cls: MagicMock) -> None:
-    # Ensure importing wizard.py does not instantiate a client (important for
-    # tests that should run fully offline).
+    # Ensure importing deckbuilder.py does not instantiate a client (important
+    # for tests that should run fully offline).
     import importlib
 
-    import wizard.wizard as mod
+    import wizard.deckbuilder as mod
 
     importlib.reload(mod)
     mock_client_cls.assert_not_called()
