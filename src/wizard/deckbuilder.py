@@ -20,8 +20,20 @@ from typing import Any
 
 import anthropic
 
-from wizard.errors import WizardAPIError
+from wizard.errors import DeckValidationError, WizardAPIError
 from wizard.models import CollectionCard, DeckCard, DeckSuggestion, ScryfallCard
+
+# Basic lands are the one card type allowed in arbitrary quantities in every
+# format we support. Wastes is the colorless basic from Battle for Zendikar.
+_BASIC_LANDS: frozenset[str] = frozenset(
+    {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
+)
+
+# Formats that share the "60-card mainboard + 15-card sideboard + max 4 copies"
+# deckbuilding rules. Everything else is either Commander or unknown.
+_SIXTY_CARD_FORMATS: frozenset[str] = frozenset(
+    {"Standard", "Modern", "Pioneer", "Legacy", "Vintage", "Pauper"}
+)
 
 # The suggest_deck tool JSON schema. This is stable across requests and
 # contributes to the cached request prefix (tools → system → messages).
@@ -179,6 +191,59 @@ def _parse_deck_suggestion(payload: dict[str, Any]) -> DeckSuggestion:
     )
 
 
+def _validate_deck(deck: DeckSuggestion) -> list[str]:
+    """Return a list of format-legality violations (empty = valid).
+
+    Scope is deliberately limited to counts / quantities / commander presence.
+    Card legality, color identity, and singleton-by-oracle-name rules are left
+    to the scorer/collection layer because validating them here would require
+    ScryfallCard lookups — which this module does not have.
+    """
+    violations: list[str] = []
+    fmt = (deck.format or "").strip()
+    fmt_title = fmt  # formats come in title-case from the tool schema enum
+
+    main_total = sum(card.quantity for card in deck.mainboard)
+    side_total = sum(card.quantity for card in deck.sideboard)
+
+    # Copy-count rule is shared (basics excluded). Sideboard quantities count
+    # toward the same 4-copy cap in the 60-card formats; Commander is stricter.
+    def _each_non_basic_excess(cards: list[DeckCard], cap: int) -> list[str]:
+        bad: list[str] = []
+        for card in cards:
+            if card.name in _BASIC_LANDS:
+                continue
+            if card.quantity > cap:
+                bad.append(
+                    f"{card.name}: {card.quantity} copies (max {cap} for non-basic-lands)"
+                )
+        return bad
+
+    if fmt_title == "Commander":
+        if not deck.commander or not deck.commander.strip():
+            violations.append("Commander format requires a non-empty `commander` field.")
+        if main_total != 100:
+            violations.append(
+                f"Commander requires exactly 100 mainboard cards; got {main_total}."
+            )
+        # Commander is singleton — every non-basic limited to 1 copy.
+        violations.extend(_each_non_basic_excess(deck.mainboard, cap=1))
+        violations.extend(_each_non_basic_excess(deck.sideboard, cap=1))
+    elif fmt_title in _SIXTY_CARD_FORMATS:
+        if main_total < 60:
+            violations.append(
+                f"{fmt_title} requires at least 60 mainboard cards; got {main_total}."
+            )
+        if deck.sideboard and side_total != 15:
+            violations.append(
+                f"{fmt_title} sideboard, when non-empty, must be exactly 15; got {side_total}."
+            )
+        violations.extend(_each_non_basic_excess(deck.mainboard, cap=4))
+        violations.extend(_each_non_basic_excess(deck.sideboard, cap=4))
+    # Unknown formats: no validation (keep the failure path minimal).
+    return violations
+
+
 def _call_anthropic(
     client: anthropic.Anthropic,
     **kwargs: Any,
@@ -253,4 +318,8 @@ def suggest_deck(
     )
 
     payload = _parse_tool_use(response.content)
-    return _parse_deck_suggestion(payload)
+    deck = _parse_deck_suggestion(payload)
+    violations = _validate_deck(deck)
+    if violations:
+        raise DeckValidationError(violations)
+    return deck

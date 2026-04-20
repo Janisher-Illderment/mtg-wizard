@@ -13,7 +13,7 @@ from rich.table import Table
 from wizard.collection import parse_manabox_csv
 from wizard.config import Settings, load_settings
 from wizard.database import count_collection, get_collection, init_db, insert_collection
-from wizard.errors import WizardAPIError
+from wizard.errors import DeckValidationError, WizardAPIError
 from wizard.exporter import render_deck, write_deck
 from wizard.models import CollectionCard, DeckSuggestion
 from wizard.scorer import rank_collection_for_format
@@ -362,6 +362,14 @@ def build(
                     # `finally` below tears down the progress task; just
                     # convert the user-facing message and exit cleanly.
                     _console.print(f"[red]{exc.user_message}[/]")
+                    raise SystemExit(1) from exc
+                except DeckValidationError as exc:
+                    _console.print(
+                        "[red]The suggested deck is not legal in "
+                        f"{format_name}:[/]"
+                    )
+                    for violation in exc.violations:
+                        _console.print(f"  [red]- {violation}[/]")
                     raise SystemExit(1) from exc
             finally:
                 progress.remove_task(task)
