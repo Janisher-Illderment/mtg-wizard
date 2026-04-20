@@ -20,6 +20,7 @@ from typing import Any
 
 import anthropic
 
+from wizard.errors import WizardAPIError
 from wizard.models import CollectionCard, DeckCard, DeckSuggestion, ScryfallCard
 
 # The suggest_deck tool JSON schema. This is stable across requests and
@@ -178,19 +179,65 @@ def _parse_deck_suggestion(payload: dict[str, Any]) -> DeckSuggestion:
     )
 
 
+def _call_anthropic(
+    client: anthropic.Anthropic,
+    **kwargs: Any,
+) -> Any:
+    """Invoke `client.messages.create` and re-raise SDK errors as WizardAPIError.
+
+    The Anthropic SDK already handles connection/429 retries internally via
+    the `max_retries=` client constructor argument. Exceptions reach us only
+    after those retries have been exhausted, so the messages below describe
+    the *final* state, not a single transient failure.
+    """
+    try:
+        return client.messages.create(**kwargs)
+    except anthropic.AuthenticationError as exc:
+        raise WizardAPIError(
+            "Your ANTHROPIC_API_KEY is invalid or revoked. Check .env.",
+            cause=exc,
+        ) from exc
+    except anthropic.RateLimitError as exc:
+        raise WizardAPIError(
+            "Rate-limited by Anthropic after retries. Wait a minute and retry.",
+            cause=exc,
+        ) from exc
+    except anthropic.BadRequestError as exc:
+        # BadRequestError exposes `.message`; fall back to str(exc) defensively.
+        msg = getattr(exc, "message", None) or str(exc)
+        raise WizardAPIError(
+            f"Request rejected by Anthropic: {msg}",
+            cause=exc,
+        ) from exc
+    except anthropic.APIConnectionError as exc:
+        raise WizardAPIError(
+            "Could not reach Anthropic API. Check your network.",
+            cause=exc,
+        ) from exc
+    except anthropic.APIStatusError as exc:
+        status = getattr(exc, "status_code", "?")
+        msg = getattr(exc, "message", None) or str(exc)
+        raise WizardAPIError(
+            f"Anthropic API error {status}: {msg}",
+            cause=exc,
+        ) from exc
+
+
 def suggest_deck(
     client: anthropic.Anthropic,
     format_name: str,
     ranked_cards: list[tuple[CollectionCard, ScryfallCard, float]],
     color_identity: list[str] | None = None,
     model: str = "claude-sonnet-4-6",
+    max_output_tokens: int = 8192,
 ) -> DeckSuggestion:
     """Ask Claude to build a deck and return a typed DeckSuggestion."""
     user_prompt = _build_user_prompt(format_name, color_identity, ranked_cards)
 
-    response = client.messages.create(
+    response = _call_anthropic(
+        client,
         model=model,
-        max_tokens=16000,
+        max_tokens=max_output_tokens,
         # cache_control on the last (only) system block caches tools + system
         # together — the prefix Claude sees for every wizard call.
         system=[

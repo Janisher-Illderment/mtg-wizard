@@ -13,6 +13,7 @@ from rich.table import Table
 from wizard.collection import parse_manabox_csv
 from wizard.config import Settings, load_settings
 from wizard.database import count_collection, get_collection, init_db, insert_collection
+from wizard.errors import WizardAPIError
 from wizard.exporter import render_deck, write_deck
 from wizard.models import CollectionCard, DeckSuggestion
 from wizard.scorer import rank_collection_for_format
@@ -334,7 +335,9 @@ def build(
             f"Asking the Wizard to build a [cyan]{format_name}[/] deck "
             f"from {len(ranked)} eligible cards..."
         )
-        client = anthropic.Anthropic(api_key=api_key)
+        # `max_retries=3` lets the SDK handle transient 429s / 5xx internally
+        # before any exception reaches our classifier in deckbuilder.
+        client = anthropic.Anthropic(api_key=api_key, max_retries=3)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -346,13 +349,19 @@ def build(
                 # Lazy import keeps `anthropic` out of the offline command paths.
                 from wizard.deckbuilder import suggest_deck
 
-                deck = suggest_deck(
-                    client=client,
-                    format_name=format_name,
-                    ranked_cards=ranked,
-                    color_identity=color_identity,
-                    model=settings.model,
-                )
+                try:
+                    deck = suggest_deck(
+                        client=client,
+                        format_name=format_name,
+                        ranked_cards=ranked,
+                        color_identity=color_identity,
+                        model=settings.model,
+                    )
+                except WizardAPIError as exc:
+                    # `finally` below tears down the progress task; just
+                    # convert the user-facing message and exit cleanly.
+                    _console.print(f"[red]{exc.user_message}[/]")
+                    raise SystemExit(1) from exc
             finally:
                 progress.remove_task(task)
     finally:
