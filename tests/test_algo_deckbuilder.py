@@ -299,6 +299,43 @@ class TestCommanderColorIdentityEnforcement:
             f"Expected WB commander but got: {deck.commander}"
         )
 
+    def test_wb_request_no_exact_prefers_colored_over_colorless(self) -> None:
+        """WB request with no WB commander: pick W or B legendary, NOT colorless."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        colorless_cmd = _sc(
+            "The Warring Triad",
+            sid="cmd-c",
+            type_line="Legendary Artifact Creature — Construct",
+            color_identity=[],
+            edhrec_rank=1,  # highest popularity — would win without the fix
+        )
+        result.append((_coll("The Warring Triad", 1), colorless_cmd, 0.999))
+        w_cmd = _sc(
+            "Atalya, Samite Master",
+            sid="cmd-w",
+            type_line="Legendary Creature — Human Cleric",
+            color_identity=["W"],
+        )
+        result.append((_coll("Atalya, Samite Master", 1), w_cmd, 0.80))
+        b_cmd = _sc(
+            "Shadow, Mysterious Assassin",
+            sid="cmd-b",
+            type_line="Legendary Creature — Human Assassin",
+            color_identity=["B"],
+        )
+        result.append((_coll("Shadow, Mysterious Assassin", 1), b_cmd, 0.75))
+        for i in range(70):
+            sc = _sc(f"WBSpell{i}", sid=f"wb{i}", type_line="Creature", color_identity=["W", "B"])
+            result.append((_coll(f"WBSpell{i}", 1), sc, 0.5))
+        for i in range(10):
+            sc = _sc(f"CL{i}", sid=f"cl{i}", type_line="Land", color_identity=[])
+            result.append((_coll(f"CL{i}", 1), sc, 0.3))
+        deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
+        assert deck.commander != "The Warring Triad", (
+            "Colorless commander should not be chosen when W/B legendaries are available"
+        )
+        assert deck.commander in {"Atalya, Samite Master", "Shadow, Mysterious Assassin"}
+
     def test_colored_commander_filters_correctly(self) -> None:
         """WB commander should exclude R/G/U cards from the pool."""
         result: list[tuple[CollectionCard, ScryfallCard, float]] = []
