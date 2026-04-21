@@ -15,7 +15,7 @@ from wizard.config import Settings, load_settings
 from wizard.database import count_collection, get_collection, init_db, insert_collection
 from wizard.errors import DeckValidationError, WizardAPIError
 from wizard.exporter import render_deck, write_deck
-from wizard.models import CollectionCard, DeckSuggestion
+from wizard.models import CollectionCard, DeckSuggestion, ScryfallCard
 from wizard.scorer import rank_collection_for_format
 from wizard.scryfall import download_bulk_data, enrich_collection
 
@@ -33,6 +33,30 @@ def _require_api_key(settings: Settings) -> str:
         )
         raise SystemExit(1)
     return settings.anthropic_api_key
+
+
+def _check_commander_color_identity(
+    deck: DeckSuggestion,
+    sc_lookup: dict[str, ScryfallCard],
+) -> list[str]:
+    """Return names of mainboard cards that violate the commander's color identity."""
+    if deck.format != "Commander" or not deck.commander:
+        return []
+    commander_sc = sc_lookup.get(deck.commander.strip().lower())
+    if commander_sc is None:
+        return []
+    allowed = set(commander_sc.color_identity)
+    violations: list[str] = []
+    for card in deck.mainboard:
+        if card.name.strip().lower() == deck.commander.strip().lower():
+            continue
+        card_sc = sc_lookup.get(card.name.strip().lower())
+        if card_sc is None:
+            continue
+        if not set(card_sc.color_identity).issubset(allowed):
+            ci_str = "".join(sorted(card_sc.color_identity)) or "C"
+            violations.append(f"{card.name} [{ci_str}]")
+    return violations
 
 
 def _render_deck_panel(deck: DeckSuggestion) -> None:
@@ -480,6 +504,27 @@ def build(
     # fall back to the --commander hint so the exporter renders a Commander line.
     if format_name.lower() == "commander" and not deck.commander and commander:
         deck.commander = commander
+
+    if deck.format == "Commander":
+        sc_lookup = {sc.name.lower(): sc for _, sc in enriched if sc is not None}
+        violations = _check_commander_color_identity(deck, sc_lookup)
+        if violations:
+            commander_sc = sc_lookup.get((deck.commander or "").lower())
+            allowed_str = "".join(sorted(commander_sc.color_identity)) if commander_sc else ""
+            identity_label = allowed_str or "C (colorless)"
+            _console.print(
+                Panel(
+                    f"Commander: [yellow]{deck.commander}[/] (identity: {identity_label})\n\n"
+                    + "\n".join(f"  - {v}" for v in violations[:20])
+                    + (f"\n  ...and {len(violations) - 20} more" if len(violations) > 20 else ""),
+                    title="[bold yellow]Commander color identity violations[/]",
+                    border_style="yellow",
+                )
+            )
+            _console.print(
+                f"[yellow]Tip:[/] Re-run with [cyan]--colors {allowed_str or 'C'}[/] "
+                "to pre-filter the card pool to the correct identity."
+            )
 
     _render_deck_panel(deck)
     if output_path:

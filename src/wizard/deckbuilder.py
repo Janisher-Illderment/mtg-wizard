@@ -104,6 +104,13 @@ MTG Deck building rules:
 - Standard/Modern/Pioneer: 60+ card mainboard, 15-card sideboard, max 4 copies of any non-basic
 - Legal cards only for the requested format
 
+Commander color identity (CRITICAL — never violate):
+- Every card in the deck must have a color identity that is a subset of the commander's color identity.
+- The card list shows each card's identity in brackets: [WB] = white/black, [C] = colorless.
+- If the commander is [C] (colorless), ALL 99 other cards must also be [C] (colorless).
+- Do NOT include colored basics (Plains, Swamp, etc.) in a colorless deck — use Wastes instead.
+- If the commander is [WB], only white, black, and colorless cards are allowed — no green, red, or blue.
+
 Synergy principles:
 - Prioritize cards with high keyword overlap
 - Consider mana curve: aim for a bell curve centered around 2-3 CMC
