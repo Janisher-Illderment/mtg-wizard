@@ -5,8 +5,9 @@ from __future__ import annotations
 import pytest
 
 from wizard.algo_deckbuilder import suggest_deck_algo
+from wizard.deckbuilder import _validate_deck
 from wizard.errors import DeckValidationError
-from wizard.models import CollectionCard, ScryfallCard
+from wizard.models import CollectionCard, DeckCard, DeckSuggestion, ScryfallCard
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +263,42 @@ class TestCommanderColorIdentityEnforcement:
         total = sum(c.quantity for c in deck.mainboard)
         assert total == 100
 
+    def test_colorless_commander_uses_wastes_not_colored_basics(self) -> None:
+        """Colorless commander deck must use Wastes, never Plains/Swamp/etc."""
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        colored_basics = {"Plains", "Island", "Swamp", "Mountain", "Forest"}
+        bad = [c for c in deck.mainboard if c.name in colored_basics]
+        assert bad == [], f"Colored basic lands found in colorless deck: {[c.name for c in bad]}"
+
+    def test_wb_request_picks_wb_commander_over_colorless(self) -> None:
+        """When a WB commander is available, it should be preferred over a colorless one."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        colorless_cmd = _sc(
+            "Emrakul, the Aeons Torn",
+            sid="cmd-c",
+            type_line="Legendary Creature — Eldrazi",
+            color_identity=[],
+        )
+        result.append((_coll("Emrakul, the Aeons Torn", 1), colorless_cmd, 0.999))
+        wb_cmd = _sc(
+            "Teysa Karlov",
+            sid="cmd-wb",
+            type_line="Legendary Creature — Human Advisor",
+            color_identity=["W", "B"],
+        )
+        result.append((_coll("Teysa Karlov", 1), wb_cmd, 0.95))
+        for i in range(80):
+            sc = _sc(f"WBSpell{i}", sid=f"wb{i}", type_line="Creature", color_identity=["W", "B"])
+            result.append((_coll(f"WBSpell{i}", 1), sc, 0.5 - i * 0.005))
+        for i in range(10):
+            sc = _sc(f"CL{i}", sid=f"cl{i}", type_line="Land", color_identity=[])
+            result.append((_coll(f"CL{i}", 1), sc, 0.3))
+        deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
+        assert deck.commander == "Teysa Karlov", (
+            f"Expected WB commander but got: {deck.commander}"
+        )
+
     def test_colored_commander_filters_correctly(self) -> None:
         """WB commander should exclude R/G/U cards from the pool."""
         result: list[tuple[CollectionCard, ScryfallCard, float]] = []
@@ -280,3 +317,122 @@ class TestCommanderColorIdentityEnforcement:
         deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
         green_in_deck = [c for c in deck.mainboard if "Green" in c.name]
         assert green_in_deck == [], f"Green cards leaked into WB deck: {[c.name for c in green_in_deck]}"
+
+
+# ---------------------------------------------------------------------------
+# _fill_basics / land distribution regression tests
+# ---------------------------------------------------------------------------
+
+class TestBasicLandDistribution:
+    def test_colorless_commander_wastes_are_present(self) -> None:
+        """Colorless deck must contain at least one Wastes entry."""
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        wastes = [c for c in deck.mainboard if c.name == "Wastes"]
+        assert wastes, "Expected Wastes in a colorless commander deck"
+
+    def test_mono_color_commander_only_that_basic(self) -> None:
+        """Mono-red commander: basic lands must be only Mountains."""
+        pool = _make_commander_pool()  # Krenko (R) + red spells
+        deck = suggest_deck_algo("Commander", pool, color_identity=["R"])
+        basics = {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
+        wrong_basics = [
+            c for c in deck.mainboard
+            if c.name in basics and c.name != "Mountain"
+        ]
+        assert wrong_basics == [], f"Non-Mountain basics in mono-R deck: {[c.name for c in wrong_basics]}"
+
+    def test_five_color_commander_uses_all_basic_types(self) -> None:
+        """WUBRG commander: deck should include all five colored basic land types."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        cmd = _sc(
+            "Progenitus",
+            sid="cmd-wubrg",
+            type_line="Legendary Creature — Hydra Avatar",
+            color_identity=["W", "U", "B", "R", "G"],
+        )
+        result.append((_coll("Progenitus", 1), cmd, 0.99))
+        for i in range(80):
+            sc = _sc(f"Spell{i}", sid=f"s{i}", type_line="Creature", color_identity=["W", "U", "B", "R", "G"])
+            result.append((_coll(f"Spell{i}", 1), sc, 0.8 - i * 0.005))
+        deck = suggest_deck_algo("Commander", result, color_identity=["W", "U", "B", "R", "G"])
+        basic_names = {c.name for c in deck.mainboard if c.name in {"Plains", "Island", "Swamp", "Mountain", "Forest"}}
+        assert basic_names == {"Plains", "Island", "Swamp", "Mountain", "Forest"}, (
+            f"Expected all five basic types, got: {basic_names}"
+        )
+        wastes = [c for c in deck.mainboard if c.name == "Wastes"]
+        assert wastes == [], "WUBRG deck should not contain Wastes"
+
+    def test_commander_hint_colorless_overrides_color_preference(self) -> None:
+        """Explicit colorless commander hint with --colors WB still builds a colorless deck."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        colorless_cmd = _sc(
+            "Emrakul, the Aeons Torn",
+            sid="cmd-c",
+            type_line="Legendary Creature — Eldrazi",
+            color_identity=[],
+        )
+        result.append((_coll("Emrakul, the Aeons Torn", 1), colorless_cmd, 0.999))
+        wb_cmd = _sc(
+            "Teysa Karlov",
+            sid="cmd-wb",
+            type_line="Legendary Creature — Human Advisor",
+            color_identity=["W", "B"],
+        )
+        result.append((_coll("Teysa Karlov", 1), wb_cmd, 0.95))
+        for i in range(80):
+            sc = _sc(f"ColorlessSpell{i}", sid=f"c{i}", type_line="Artifact", color_identity=[])
+            result.append((_coll(f"ColorlessSpell{i}", 1), sc, 0.5 - i * 0.005))
+        deck = suggest_deck_algo(
+            "Commander",
+            result,
+            color_identity=["W", "B"],
+            commander_hint="Emrakul, the Aeons Torn",
+        )
+        assert deck.commander == "Emrakul, the Aeons Torn"
+        colored_basics = {"Plains", "Island", "Swamp", "Mountain", "Forest"}
+        bad = [c for c in deck.mainboard if c.name in colored_basics]
+        assert bad == [], f"Colored basics in hinted colorless deck: {[c.name for c in bad]}"
+
+
+# ---------------------------------------------------------------------------
+# _validate_deck unit tests (colored-basics CR 903.5d check)
+# ---------------------------------------------------------------------------
+
+class TestValidateDeckColoredBasics:
+    def _commander_deck(self, cards: list[DeckCard]) -> DeckSuggestion:
+        return DeckSuggestion(
+            deck_name="Test",
+            format="Commander",
+            commander="Test Commander",
+            mainboard=cards,
+            sideboard=[],
+        )
+
+    def test_colored_basic_in_colorless_deck_is_violation(self) -> None:
+        cards = [DeckCard(quantity=1, name="Test Commander")]
+        cards += [DeckCard(quantity=1, name=f"Artifact{i}") for i in range(60)]
+        cards += [DeckCard(quantity=38, name="Plains")]
+        # Pad to 100
+        deck = self._commander_deck(cards[:1] + cards[1:62] + [DeckCard(quantity=38, name="Plains")])
+        violations = _validate_deck(deck, commander_color_identity=[])
+        assert any("Plains" in v and "CR 903.5d" in v for v in violations)
+
+    def test_wastes_in_colorless_deck_is_not_a_violation(self) -> None:
+        cards = [DeckCard(quantity=1, name="Test Commander")]
+        cards += [DeckCard(quantity=1, name=f"Artifact{i}") for i in range(61)]
+        cards += [DeckCard(quantity=38, name="Wastes")]
+        deck = self._commander_deck(cards)
+        violations = _validate_deck(deck, commander_color_identity=[])
+        land_violations = [v for v in violations if "Wastes" in v and "CR 903.5d" in v]
+        assert land_violations == []
+
+    def test_colored_basic_without_commander_ci_not_flagged(self) -> None:
+        """When commander_color_identity is not provided, no CR 903.5d check runs."""
+        cards = [DeckCard(quantity=1, name="Test Commander")]
+        cards += [DeckCard(quantity=1, name=f"Spell{i}") for i in range(61)]
+        cards += [DeckCard(quantity=38, name="Plains")]
+        deck = self._commander_deck(cards)
+        violations = _validate_deck(deck)  # no commander_color_identity
+        land_violations = [v for v in violations if "CR 903.5d" in v]
+        assert land_violations == []

@@ -13,6 +13,7 @@ import requests
 from wizard.deckbuilder import (
     SYSTEM_PROMPT,
     _build_user_prompt,
+    _find_commander_ci,
     _parse_deck_suggestion,
     _validate_deck,
 )
@@ -86,7 +87,8 @@ def suggest_deck_ollama(
         ) from exc
 
     deck = _parse_deck_suggestion(deck_payload)
-    violations = _validate_deck(deck)
+    commander_ci = _find_commander_ci(deck.commander, ranked_cards)
+    violations = _validate_deck(deck, commander_color_identity=commander_ci)
     if violations:
         raise DeckValidationError(violations)
     return deck
