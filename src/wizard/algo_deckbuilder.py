@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from wizard.deckbuilder import _validate_deck
+from wizard.deckbuilder import _find_commander_ci, _validate_deck
 from wizard.errors import DeckValidationError
 from wizard.models import CollectionCard, DeckCard, DeckSuggestion, ScryfallCard
 
@@ -116,7 +116,7 @@ def _build_commander_deck(
     ranked: list[tuple[CollectionCard, ScryfallCard, float]],
     color_identity: list[str] | None,
     commander_hint: str | None,
-) -> DeckSuggestion:
+) -> tuple[DeckSuggestion, list[str]]:
     TARGET_LANDS = 38
     TOTAL_CARDS = 100
 
@@ -189,7 +189,7 @@ def _build_commander_deck(
     mainboard = _adjust_to_total(mainboard, TOTAL_CARDS, effective_ci)
 
     ci_str = "".join(effective_ci) if effective_ci else "C"
-    return DeckSuggestion(
+    deck = DeckSuggestion(
         deck_name=f"{ci_str} {commander_name or 'Commander'} (Auto)",
         format="Commander",
         commander=commander_name,
@@ -202,6 +202,7 @@ def _build_commander_deck(
         ),
         key_synergies=_top_keywords(ranked[:50]),
     )
+    return deck, effective_ci
 
 
 def _build_sixty_card_deck(
@@ -297,11 +298,12 @@ def suggest_deck_algo(
     not happen in normal use — indicates a bug in the algorithm).
     """
     if format_name == "Commander":
-        deck = _build_commander_deck(ranked_cards, color_identity, commander_hint)
+        deck, effective_ci = _build_commander_deck(ranked_cards, color_identity, commander_hint)
+        violations = _validate_deck(deck, commander_color_identity=effective_ci)
     else:
         deck = _build_sixty_card_deck(ranked_cards, format_name, color_identity)
+        violations = _validate_deck(deck)
 
-    violations = _validate_deck(deck)
     if violations:
         raise DeckValidationError(violations)
     return deck

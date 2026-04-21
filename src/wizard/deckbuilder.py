@@ -29,6 +29,11 @@ _BASIC_LANDS: frozenset[str] = frozenset(
     {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
 )
 
+# Colored basics — illegal in a colorless commander deck (CR 903.5d).
+_COLORED_BASICS: frozenset[str] = frozenset(
+    {"Plains", "Island", "Swamp", "Mountain", "Forest"}
+)
+
 # Formats that share the "60-card mainboard + 15-card sideboard + max 4 copies"
 # deckbuilding rules. Everything else is either Commander or unknown.
 _SIXTY_CARD_FORMATS: frozenset[str] = frozenset(
@@ -110,6 +115,7 @@ Commander color identity (CRITICAL — never violate):
 - If the commander is [C] (colorless), ALL 99 other cards must also be [C] (colorless).
 - Do NOT include colored basics (Plains, Swamp, etc.) in a colorless deck — use Wastes instead.
 - If the commander is [WB], only white, black, and colorless cards are allowed — no green, red, or blue.
+- When the player specifies a color identity (e.g. WB), choose a commander whose color identity exactly matches that request; only fall back to a colorless commander if no matching colored legendary is available.
 
 Synergy principles:
 - Prioritize cards with high keyword overlap
@@ -198,12 +204,30 @@ def _parse_deck_suggestion(payload: dict[str, Any]) -> DeckSuggestion:
     )
 
 
-def _validate_deck(deck: DeckSuggestion) -> list[str]:
+def _find_commander_ci(
+    commander_name: str | None,
+    ranked_cards: list[tuple[CollectionCard, ScryfallCard, float]],
+) -> list[str] | None:
+    """Return the color identity of `commander_name` from the ranked pool, or None."""
+    if not commander_name:
+        return None
+    for _, sc, _ in ranked_cards:
+        if sc.name == commander_name:
+            return sc.color_identity
+    return None
+
+
+def _validate_deck(
+    deck: DeckSuggestion,
+    commander_color_identity: list[str] | None = None,
+) -> list[str]:
     """Return a list of format-legality violations (empty = valid).
 
-    Scope is deliberately limited to counts / quantities / commander presence.
-    Card legality, color identity, and singleton-by-oracle-name rules are left
-    to the scorer/collection layer because validating them here would require
+    Scope is deliberately limited to counts / quantities / commander presence,
+    plus the colored-basics-in-colorless-deck rule (CR 903.5d) when
+    `commander_color_identity` is supplied.
+    Card legality and singleton-by-oracle-name rules are left to the
+    scorer/collection layer because validating them here would require
     ScryfallCard lookups — which this module does not have.
     """
     violations: list[str] = []
@@ -236,6 +260,15 @@ def _validate_deck(deck: DeckSuggestion) -> list[str]:
         # Commander is singleton — every non-basic limited to 1 copy.
         violations.extend(_each_non_basic_excess(deck.mainboard, cap=1))
         violations.extend(_each_non_basic_excess(deck.sideboard, cap=1))
+        # CR 903.5d: colored basics (Plains, Swamp, etc.) are illegal when the
+        # commander is colorless because their color identity is not a subset of {}.
+        if commander_color_identity is not None and not commander_color_identity:
+            for card in deck.mainboard:
+                if card.name in _COLORED_BASICS:
+                    violations.append(
+                        f"{card.name} is a colored basic land and cannot appear in a "
+                        "colorless commander deck (CR 903.5d) — use Wastes instead."
+                    )
     elif fmt_title in _SIXTY_CARD_FORMATS:
         if main_total < 60:
             violations.append(
@@ -326,7 +359,8 @@ def suggest_deck(
 
     payload = _parse_tool_use(response.content)
     deck = _parse_deck_suggestion(payload)
-    violations = _validate_deck(deck)
+    commander_ci = _find_commander_ci(deck.commander, ranked_cards)
+    violations = _validate_deck(deck, commander_color_identity=commander_ci)
     if violations:
         raise DeckValidationError(violations)
     return deck
