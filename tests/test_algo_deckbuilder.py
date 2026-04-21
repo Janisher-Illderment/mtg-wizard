@@ -239,9 +239,10 @@ def _make_colorless_commander_pool() -> list[tuple[CollectionCard, ScryfallCard,
 
 class TestCommanderColorIdentityEnforcement:
     def test_colorless_commander_no_colored_cards(self) -> None:
-        """Colorless commander must produce an all-colorless deck even with WB --colors."""
+        """Colorless commander (selected via no --colors) produces an all-colorless deck."""
         pool = _make_colorless_commander_pool()
-        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        # No color_identity → colorless commander selected naturally (no --colors flag).
+        deck = suggest_deck_algo("Commander", pool, color_identity=None)
         assert deck.commander == "The Warring Triad"
         colored = [
             c for c in deck.mainboard
@@ -253,20 +254,19 @@ class TestCommanderColorIdentityEnforcement:
 
     def test_colorless_commander_deck_name_uses_commander_identity(self) -> None:
         pool = _make_colorless_commander_pool()
-        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
-        # Deck name should reflect the commander's identity (C), not the user's --colors (WB).
+        deck = suggest_deck_algo("Commander", pool, color_identity=None)
         assert deck.deck_name.startswith("C ")
 
     def test_colorless_commander_total_still_100(self) -> None:
         pool = _make_colorless_commander_pool()
-        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        deck = suggest_deck_algo("Commander", pool, color_identity=None)
         total = sum(c.quantity for c in deck.mainboard)
         assert total == 100
 
     def test_colorless_commander_uses_wastes_not_colored_basics(self) -> None:
         """Colorless commander deck must use Wastes, never Plains/Swamp/etc."""
         pool = _make_colorless_commander_pool()
-        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        deck = suggest_deck_algo("Commander", pool, color_identity=None)
         colored_basics = {"Plains", "Island", "Swamp", "Mountain", "Forest"}
         bad = [c for c in deck.mainboard if c.name in colored_basics]
         assert bad == [], f"Colored basic lands found in colorless deck: {[c.name for c in bad]}"
@@ -299,15 +299,14 @@ class TestCommanderColorIdentityEnforcement:
             f"Expected WB commander but got: {deck.commander}"
         )
 
-    def test_wb_request_no_exact_prefers_colored_over_colorless(self) -> None:
-        """WB request with no WB commander: pick W or B legendary, NOT colorless."""
+    def test_wb_request_no_exact_raises_with_available_commanders(self) -> None:
+        """WB request with no WB commander must fail, not silently build the wrong deck."""
         result: list[tuple[CollectionCard, ScryfallCard, float]] = []
         colorless_cmd = _sc(
             "The Warring Triad",
             sid="cmd-c",
             type_line="Legendary Artifact Creature — Construct",
             color_identity=[],
-            edhrec_rank=1,  # highest popularity — would win without the fix
         )
         result.append((_coll("The Warring Triad", 1), colorless_cmd, 0.999))
         w_cmd = _sc(
@@ -317,24 +316,18 @@ class TestCommanderColorIdentityEnforcement:
             color_identity=["W"],
         )
         result.append((_coll("Atalya, Samite Master", 1), w_cmd, 0.80))
-        b_cmd = _sc(
-            "Shadow, Mysterious Assassin",
-            sid="cmd-b",
-            type_line="Legendary Creature — Human Assassin",
-            color_identity=["B"],
-        )
-        result.append((_coll("Shadow, Mysterious Assassin", 1), b_cmd, 0.75))
         for i in range(70):
             sc = _sc(f"WBSpell{i}", sid=f"wb{i}", type_line="Creature", color_identity=["W", "B"])
             result.append((_coll(f"WBSpell{i}", 1), sc, 0.5))
-        for i in range(10):
-            sc = _sc(f"CL{i}", sid=f"cl{i}", type_line="Land", color_identity=[])
-            result.append((_coll(f"CL{i}", 1), sc, 0.3))
-        deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
-        assert deck.commander != "The Warring Triad", (
-            "Colorless commander should not be chosen when W/B legendaries are available"
+        with pytest.raises(DeckValidationError) as exc_info:
+            suggest_deck_algo("Commander", result, color_identity=["W", "B"])
+        violations = exc_info.value.violations
+        assert any("[BW]" in v or "[WB]" in v or "BW" in v or "WB" in v for v in violations), (
+            f"Error should mention the requested identity, got: {violations}"
         )
-        assert deck.commander in {"Atalya, Samite Master", "Shadow, Mysterious Assassin"}
+        assert any("Atalya" in v or "Warring" in v for v in violations), (
+            f"Error should list available commanders, got: {violations}"
+        )
 
     def test_colored_commander_filters_correctly(self) -> None:
         """WB commander should exclude R/G/U cards from the pool."""
@@ -364,7 +357,7 @@ class TestBasicLandDistribution:
     def test_colorless_commander_wastes_are_present(self) -> None:
         """Colorless deck must contain at least one Wastes entry."""
         pool = _make_colorless_commander_pool()
-        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        deck = suggest_deck_algo("Commander", pool, color_identity=None)
         wastes = [c for c in deck.mainboard if c.name == "Wastes"]
         assert wastes, "Expected Wastes in a colorless commander deck"
 

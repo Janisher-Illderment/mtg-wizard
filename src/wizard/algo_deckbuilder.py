@@ -132,8 +132,11 @@ def _build_commander_deck(
                 break
 
     if commander_name is None and color_identity:
+        # When the user specifies colors, require an exact-match commander.
+        # A W commander cannot lead a WB deck, and a colorless commander cannot
+        # lead any colored deck — silently building the wrong deck is worse than
+        # failing clearly. Commander rule: deck CI == commander CI.
         ci_set = set(color_identity)
-        # Pass 1: exact color identity match (e.g. WB request → WB commander).
         for i, (_, sc, _) in enumerate(ranked):
             if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES:
                 if set(sc.color_identity) == ci_set:
@@ -141,20 +144,21 @@ def _build_commander_deck(
                     commander_idx = i
                     break
 
-    if commander_name is None and color_identity:
-        ci_set = set(color_identity)
-        # Pass 2: any non-colorless legendary whose identity ⊆ requested colors.
-        # Avoids silently picking a colorless commander when W-only or B-only
-        # legendaries are available for a WB request.
-        for i, (_, sc, _) in enumerate(ranked):
-            if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES:
-                if sc.color_identity and set(sc.color_identity).issubset(ci_set):
-                    commander_name = sc.name
-                    commander_idx = i
-                    break
+        if commander_name is None:
+            # No exact match — list available commanders so the user can choose.
+            available = [
+                f"{sc.name} [{''.join(sc.color_identity) or 'C'}]"
+                for _, sc, _ in ranked
+                if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES
+            ]
+            ci_label = "".join(sorted(color_identity))
+            raise DeckValidationError([
+                f"No legendary commander with color identity [{ci_label}] found in your collection.",
+                "Available commanders: " + (", ".join(available) if available else "none"),
+            ])
 
     if commander_name is None:
-        # Pass 3: any legendary (including colorless) as last resort.
+        # No color constraint — pick the highest-ranked legendary.
         for i, (_, sc, _) in enumerate(ranked):
             if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES:
                 commander_name = sc.name
