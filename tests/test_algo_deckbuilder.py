@@ -262,6 +262,42 @@ class TestCommanderColorIdentityEnforcement:
         total = sum(c.quantity for c in deck.mainboard)
         assert total == 100
 
+    def test_colorless_commander_uses_wastes_not_colored_basics(self) -> None:
+        """Colorless commander deck must use Wastes, never Plains/Swamp/etc."""
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        colored_basics = {"Plains", "Island", "Swamp", "Mountain", "Forest"}
+        bad = [c for c in deck.mainboard if c.name in colored_basics]
+        assert bad == [], f"Colored basic lands found in colorless deck: {[c.name for c in bad]}"
+
+    def test_wb_request_picks_wb_commander_over_colorless(self) -> None:
+        """When a WB commander is available, it should be preferred over a colorless one."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        colorless_cmd = _sc(
+            "Emrakul, the Aeons Torn",
+            sid="cmd-c",
+            type_line="Legendary Creature — Eldrazi",
+            color_identity=[],
+        )
+        result.append((_coll("Emrakul, the Aeons Torn", 1), colorless_cmd, 0.999))
+        wb_cmd = _sc(
+            "Teysa Karlov",
+            sid="cmd-wb",
+            type_line="Legendary Creature — Human Advisor",
+            color_identity=["W", "B"],
+        )
+        result.append((_coll("Teysa Karlov", 1), wb_cmd, 0.95))
+        for i in range(80):
+            sc = _sc(f"WBSpell{i}", sid=f"wb{i}", type_line="Creature", color_identity=["W", "B"])
+            result.append((_coll(f"WBSpell{i}", 1), sc, 0.5 - i * 0.005))
+        for i in range(10):
+            sc = _sc(f"CL{i}", sid=f"cl{i}", type_line="Land", color_identity=[])
+            result.append((_coll(f"CL{i}", 1), sc, 0.3))
+        deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
+        assert deck.commander == "Teysa Karlov", (
+            f"Expected WB commander but got: {deck.commander}"
+        )
+
     def test_colored_commander_filters_correctly(self) -> None:
         """WB commander should exclude R/G/U cards from the pool."""
         result: list[tuple[CollectionCard, ScryfallCard, float]] = []

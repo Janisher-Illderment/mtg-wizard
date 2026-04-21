@@ -41,10 +41,14 @@ def _fill_basics(count: int, color_identity: list[str] | None) -> list[DeckCard]
     """Return DeckCards for `count` basic lands distributed evenly by color."""
     if count <= 0:
         return []
-    colors = color_identity or list(_COLOR_TO_BASIC.keys())
+    if color_identity is None:
+        colors: list[str] = list(_COLOR_TO_BASIC.keys())
+    else:
+        colors = color_identity
     basics = [_COLOR_TO_BASIC[c] for c in colors if c in _COLOR_TO_BASIC]
     if not basics:
-        basics = ["Forest"]
+        # Colorless identity (empty list) — Wastes is the colorless basic land.
+        basics = ["Wastes"]
     per = count // len(basics)
     remainder = count % len(basics)
     result: list[DeckCard] = []
@@ -127,6 +131,17 @@ def _build_commander_deck(
                 commander_idx = i
                 break
 
+    if commander_name is None and color_identity:
+        # Prefer a commander whose color identity exactly matches the request
+        # so that e.g. a WB request doesn't silently pick a colorless commander.
+        ci_set = set(color_identity)
+        for i, (_, sc, _) in enumerate(ranked):
+            if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES:
+                if set(sc.color_identity) == ci_set:
+                    commander_name = sc.name
+                    commander_idx = i
+                    break
+
     if commander_name is None:
         for i, (_, sc, _) in enumerate(ranked):
             if _is_legendary_creature(sc) and sc.name not in _BASIC_LAND_NAMES:
@@ -167,11 +182,11 @@ def _build_commander_deck(
         DeckCard(quantity=1, name=sc.name, set_code=sc.set_code, collector_number=sc.collector_number)
         for _, sc, _ in pool_nb_lands[:nb_land_slots]
     ]
-    basic_land_cards = _fill_basics(basic_land_count, effective_ci or None)
+    basic_land_cards = _fill_basics(basic_land_count, effective_ci)
 
     commander_entry = [DeckCard(quantity=1, name=commander_name or "Unknown")]
     mainboard: list[DeckCard] = commander_entry + chosen_spells + chosen_nb_lands + basic_land_cards
-    mainboard = _adjust_to_total(mainboard, TOTAL_CARDS, effective_ci or None)
+    mainboard = _adjust_to_total(mainboard, TOTAL_CARDS, effective_ci)
 
     ci_str = "".join(effective_ci) if effective_ci else "C"
     return DeckSuggestion(
