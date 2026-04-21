@@ -205,3 +205,78 @@ class TestCommanderFormat:
         pool = _make_commander_pool()
         deck = suggest_deck_algo("Commander", pool, color_identity=["R"])
         assert deck is not None
+
+
+# ---------------------------------------------------------------------------
+# Commander color identity enforcement tests
+# ---------------------------------------------------------------------------
+
+def _make_colorless_commander_pool() -> list[tuple[CollectionCard, ScryfallCard, float]]:
+    """Pool with a colorless legendary commander and a mix of colorless + colored cards."""
+    result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+    cmd = _sc(
+        "The Warring Triad",
+        sid="cmd-colorless",
+        type_line="Legendary Artifact Creature — Construct",
+        color_identity=[],
+    )
+    result.append((_coll("The Warring Triad", 1), cmd, 0.99))
+    for i in range(40):
+        sc = _sc(f"WhiteSpell{i}", sid=f"w{i}", type_line="Creature", color_identity=["W"])
+        result.append((_coll(f"WhiteSpell{i}", 1), sc, 0.8 - i * 0.01))
+    for i in range(40):
+        sc = _sc(f"BlackSpell{i}", sid=f"b{i}", type_line="Creature", color_identity=["B"])
+        result.append((_coll(f"BlackSpell{i}", 1), sc, 0.7 - i * 0.01))
+    for i in range(20):
+        sc = _sc(f"ColorlessSpell{i}", sid=f"c{i}", type_line="Artifact", color_identity=[])
+        result.append((_coll(f"ColorlessSpell{i}", 1), sc, 0.6 - i * 0.01))
+    for i in range(10):
+        sc = _sc(f"WastesLand{i}", sid=f"wl{i}", type_line="Land", color_identity=[])
+        result.append((_coll(f"WastesLand{i}", 1), sc, 0.3))
+    return result
+
+
+class TestCommanderColorIdentityEnforcement:
+    def test_colorless_commander_no_colored_cards(self) -> None:
+        """Colorless commander must produce an all-colorless deck even with WB --colors."""
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        assert deck.commander == "The Warring Triad"
+        colored = [
+            c for c in deck.mainboard
+            if c.name not in {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
+            and c.name != deck.commander
+            and any(x in c.name for x in ("White", "Black"))
+        ]
+        assert colored == [], f"Colored cards found in colorless deck: {[c.name for c in colored]}"
+
+    def test_colorless_commander_deck_name_uses_commander_identity(self) -> None:
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        # Deck name should reflect the commander's identity (C), not the user's --colors (WB).
+        assert deck.deck_name.startswith("C ")
+
+    def test_colorless_commander_total_still_100(self) -> None:
+        pool = _make_colorless_commander_pool()
+        deck = suggest_deck_algo("Commander", pool, color_identity=["W", "B"])
+        total = sum(c.quantity for c in deck.mainboard)
+        assert total == 100
+
+    def test_colored_commander_filters_correctly(self) -> None:
+        """WB commander should exclude R/G/U cards from the pool."""
+        result: list[tuple[CollectionCard, ScryfallCard, float]] = []
+        cmd = _sc("Teysa Karlov", sid="cmd-wb", type_line="Legendary Creature — Human Advisor",
+                  color_identity=["W", "B"])
+        result.append((_coll("Teysa Karlov", 1), cmd, 0.99))
+        for i in range(50):
+            sc = _sc(f"WBSpell{i}", sid=f"wb{i}", type_line="Creature", color_identity=["W", "B"])
+            result.append((_coll(f"WBSpell{i}", 1), sc, 0.8 - i * 0.01))
+        for i in range(20):
+            sc = _sc(f"GreenSpell{i}", sid=f"g{i}", type_line="Creature", color_identity=["G"])
+            result.append((_coll(f"GreenSpell{i}", 1), sc, 0.9))  # higher score — should be excluded
+        for i in range(10):
+            sc = _sc(f"CL{i}", sid=f"cl{i}", type_line="Land", color_identity=[])
+            result.append((_coll(f"CL{i}", 1), sc, 0.4))
+        deck = suggest_deck_algo("Commander", result, color_identity=["W", "B"])
+        green_in_deck = [c for c in deck.mainboard if "Green" in c.name]
+        assert green_in_deck == [], f"Green cards leaked into WB deck: {[c.name for c in green_in_deck]}"

@@ -134,7 +134,18 @@ def _build_commander_deck(
                 commander_idx = i
                 break
 
-    pool = [(c, sc, s) for i, (c, sc, s) in enumerate(ranked) if i != commander_idx]
+    # Derive effective color identity from the commander's own Scryfall data.
+    # The user's --colors flag may be broader (e.g. WB) but a colorless commander
+    # still constrains the deck to colorless only. Commander rules 903.4b.
+    commander_sc = ranked[commander_idx][1] if commander_idx >= 0 else None
+    effective_ci: list[str] = commander_sc.color_identity if commander_sc is not None else (color_identity or [])
+    allowed_ci: set[str] = set(effective_ci)
+
+    pool = [
+        (c, sc, s)
+        for i, (c, sc, s) in enumerate(ranked)
+        if i != commander_idx and set(sc.color_identity).issubset(allowed_ci)
+    ]
 
     pool_spells = _dedupe_by_name(
         [(c, sc, s) for c, sc, s in pool if not _is_land(sc) and sc.name not in _BASIC_LAND_NAMES]
@@ -156,13 +167,13 @@ def _build_commander_deck(
         DeckCard(quantity=1, name=sc.name, set_code=sc.set_code, collector_number=sc.collector_number)
         for _, sc, _ in pool_nb_lands[:nb_land_slots]
     ]
-    basic_land_cards = _fill_basics(basic_land_count, color_identity)
+    basic_land_cards = _fill_basics(basic_land_count, effective_ci or None)
 
     commander_entry = [DeckCard(quantity=1, name=commander_name or "Unknown")]
     mainboard: list[DeckCard] = commander_entry + chosen_spells + chosen_nb_lands + basic_land_cards
-    mainboard = _adjust_to_total(mainboard, TOTAL_CARDS, color_identity)
+    mainboard = _adjust_to_total(mainboard, TOTAL_CARDS, effective_ci or None)
 
-    ci_str = "".join(color_identity or ["C"])
+    ci_str = "".join(effective_ci) if effective_ci else "C"
     return DeckSuggestion(
         deck_name=f"{ci_str} {commander_name or 'Commander'} (Auto)",
         format="Commander",
