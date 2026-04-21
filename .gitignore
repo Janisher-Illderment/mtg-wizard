@@ -57,3 +57,8 @@ Thumbs.db
 *.sqlite3
 .wizard/
 wizard_data/
+
+# User data — collection exports and generated decks
+manaBoxCollection.csv
+*.deck.txt
+Deck*.txt

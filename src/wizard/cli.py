@@ -83,12 +83,59 @@ def _render_deck_panel(deck: DeckSuggestion) -> None:
         )
 
 
+def _run_backend(
+    backend: str,
+    settings: Settings,
+    format_name: str,
+    ranked: list,
+    color_identity: list[str] | None,
+    commander_hint: str,
+) -> "DeckSuggestion":
+    """Dispatch to the appropriate deck-building backend."""
+    if backend == "algorithmic":
+        from wizard.algo_deckbuilder import suggest_deck_algo
+
+        return suggest_deck_algo(
+            format_name=format_name,
+            ranked_cards=ranked,
+            color_identity=color_identity,
+            commander_hint=commander_hint or None,
+        )
+
+    if backend == "ollama":
+        from wizard.ollama_deckbuilder import suggest_deck_ollama
+
+        return suggest_deck_ollama(
+            format_name=format_name,
+            ranked_cards=ranked,
+            color_identity=color_identity,
+            ollama_url=settings.ollama_url,
+            model=settings.ollama_model,
+        )
+
+    # anthropic (default)
+    import anthropic
+
+    api_key = _require_api_key(settings)
+    client = anthropic.Anthropic(api_key=api_key, max_retries=3)
+    from wizard.deckbuilder import suggest_deck
+
+    return suggest_deck(
+        client=client,
+        format_name=format_name,
+        ranked_cards=ranked,
+        color_identity=color_identity,
+        model=settings.model,
+        max_output_tokens=settings.max_output_tokens,
+    )
+
+
 # --- Click group -----------------------------------------------------------
 
 @click.group()
 @click.pass_context
 def main(ctx: click.Context) -> None:
-    """MTG Wizard — build decks from your ManaBox collection with Claude AI."""
+    """MTG Wizard — build decks from your ManaBox collection."""
     ctx.ensure_object(dict)
     ctx.obj["settings"] = load_settings()
 
@@ -291,6 +338,19 @@ def collection(ctx: click.Context) -> None:
     default=None,
     help="Write the deck as ManaBox-importable text to this .txt path.",
 )
+@click.option(
+    "--backend",
+    "backend_flag",
+    type=click.Choice(["auto", "algorithmic", "ollama", "anthropic"], case_sensitive=False),
+    default=None,
+    help=(
+        "Deck-building backend. "
+        "auto (default): uses Anthropic if ANTHROPIC_API_KEY is set, else algorithmic. "
+        "algorithmic: local, no API key required. "
+        "ollama: local LLM via Ollama (requires `ollama serve`). "
+        "anthropic: Claude API (requires ANTHROPIC_API_KEY)."
+    ),
+)
 @click.pass_context
 def build(
     ctx: click.Context,
@@ -298,13 +358,18 @@ def build(
     colors: str,
     commander: str,
     output_path: Path | None,
+    backend_flag: str | None,
 ) -> None:
-    """Run the Wizard AI to suggest a deck from your imported collection."""
-    # Imported lazily so `sync`, `import-collection`, and `collection` work offline.
-    import anthropic
+    """Suggest a deck from your imported collection.
 
+    By default (--backend auto) the Wizard uses Claude if ANTHROPIC_API_KEY
+    is set in .env; otherwise it falls back to the algorithmic builder.
+    """
     settings: Settings = ctx.obj["settings"]
-    api_key = _require_api_key(settings)
+
+    effective_backend = (backend_flag or settings.backend).lower()
+    if effective_backend == "auto":
+        effective_backend = "anthropic" if settings.anthropic_api_key else "algorithmic"
 
     # Accept either contiguous ("WUB") or comma-separated ("W,U,B") color inputs.
     if "," in colors:
@@ -370,13 +435,16 @@ def build(
             )
             raise SystemExit(1)
 
+        _backend_labels = {
+            "algorithmic": "algorithmic builder",
+            "ollama": f"Ollama ({settings.ollama_model})",
+            "anthropic": f"Claude ({settings.model})",
+        }
         _console.print(
-            f"Asking the Wizard to build a [cyan]{format_name}[/] deck "
-            f"from {len(ranked)} eligible cards..."
+            f"Building a [cyan]{format_name}[/] deck from {len(ranked)} eligible cards "
+            f"using the [bold]{_backend_labels.get(effective_backend, effective_backend)}[/]..."
         )
-        # `max_retries=3` lets the SDK handle transient 429s / 5xx internally
-        # before any exception reaches our classifier in deckbuilder.
-        client = anthropic.Anthropic(api_key=api_key, max_retries=3)
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -385,37 +453,30 @@ def build(
         ) as progress:
             task = progress.add_task("Consulting the Wizard...", total=None)
             try:
-                # Lazy import keeps `anthropic` out of the offline command paths.
-                from wizard.deckbuilder import suggest_deck
-
-                try:
-                    deck = suggest_deck(
-                        client=client,
-                        format_name=format_name,
-                        ranked_cards=ranked,
-                        color_identity=color_identity,
-                        model=settings.model,
-                        max_output_tokens=settings.max_output_tokens,
-                    )
-                except WizardAPIError as exc:
-                    # `finally` below tears down the progress task; just
-                    # convert the user-facing message and exit cleanly.
-                    _console.print(f"[red]{exc.user_message}[/]")
-                    raise SystemExit(1) from exc
-                except DeckValidationError as exc:
-                    _console.print(
-                        "[red]The suggested deck is not legal in "
-                        f"{format_name}:[/]"
-                    )
-                    for violation in exc.violations:
-                        _console.print(f"  [red]- {violation}[/]")
-                    raise SystemExit(1) from exc
+                deck = _run_backend(
+                    effective_backend,
+                    settings,
+                    format_name,
+                    ranked,
+                    color_identity,
+                    commander,
+                )
+            except WizardAPIError as exc:
+                _console.print(f"[red]{exc.user_message}[/]")
+                raise SystemExit(1) from exc
+            except DeckValidationError as exc:
+                _console.print(
+                    f"[red]The suggested deck is not legal in {format_name}:[/]"
+                )
+                for violation in exc.violations:
+                    _console.print(f"  [red]- {violation}[/]")
+                raise SystemExit(1) from exc
             finally:
                 progress.remove_task(task)
     finally:
         conn.close()
 
-    # If the user asked for Commander but the deck was returned without one,
+    # If the user asked for Commander but the deck came back without one,
     # fall back to the --commander hint so the exporter renders a Commander line.
     if format_name.lower() == "commander" and not deck.commander and commander:
         deck.commander = commander
@@ -425,7 +486,6 @@ def build(
         write_deck(deck, output_path)
         _console.print(f"[green]Deck exported to[/] [cyan]{output_path}[/]")
     else:
-        # Always print the ManaBox text block so the user can copy/paste it.
         _console.print(Panel(render_deck(deck), title="ManaBox text", border_style="blue"))
 
 

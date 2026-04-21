@@ -17,6 +17,9 @@ class Settings:
     db_path: Path
     model: str
     max_output_tokens: int = 8192
+    backend: str = "auto"               # auto | algorithmic | ollama | anthropic
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1"
 
 
 def _expand_path(raw: str) -> Path:
@@ -60,4 +63,7 @@ def load_settings() -> Settings:
         db_path=_expand_path(db_path_raw),
         model=model,
         max_output_tokens=max_output_tokens,
+        backend=os.environ.get("WIZARD_BACKEND", "auto"),
+        ollama_url=os.environ.get("WIZARD_OLLAMA_URL", "http://localhost:11434"),
+        ollama_model=os.environ.get("WIZARD_OLLAMA_MODEL", "llama3.1"),
     )

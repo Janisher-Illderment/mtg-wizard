@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -9,6 +10,18 @@ from pathlib import Path
 from typing import Iterable
 
 from wizard.models import CollectionCard
+
+
+class _DecimalEncoder(json.JSONEncoder):
+    """Serialize Decimal (produced by ijson) as float."""
+    def default(self, obj: object) -> object:
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)
+        return super().default(obj)
+
+
+def _dumps(obj: object) -> str:
+    return json.dumps(obj, cls=_DecimalEncoder, sort_keys=True)
 
 SCHEMA: tuple[str, ...] = (
     """
@@ -94,16 +107,16 @@ def _card_row_from_scryfall(card: dict) -> tuple:
         card.get("set"),
         card.get("collector_number"),
         card.get("mana_cost", ""),
-        json.dumps(card.get("colors", []), sort_keys=True),
-        json.dumps(card.get("color_identity", []), sort_keys=True),
+        _dumps(card.get("colors", [])),
+        _dumps(card.get("color_identity", [])),
         card.get("type_line", ""),
         card.get("oracle_text", ""),
-        json.dumps(card.get("keywords", []), sort_keys=True),
-        json.dumps(card.get("legalities", {}), sort_keys=True),
+        _dumps(card.get("keywords", [])),
+        _dumps(card.get("legalities", {})),
         card.get("edhrec_rank"),
         card.get("penny_rank"),
-        json.dumps(card.get("prices", {}), sort_keys=True),
-        json.dumps(card, sort_keys=True),
+        _dumps(card.get("prices", {})),
+        _dumps(card),
         _now_iso(),
     )
 
@@ -199,7 +212,7 @@ def insert_collection(
     """
     rows = [
         (
-            card.scryfall_id or None,
+            None,  # scryfall_id FK omitted — ManaBox printing IDs differ from oracle IDs; enrichment uses name lookup
             card.name,
             card.set_code or None,
             card.collector_number or None,
